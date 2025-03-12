@@ -4,6 +4,8 @@ import numpy as np
 from matplotlib.ticker import MaxNLocator
 import time
 import os
+import subprocess
+import re
 
 def execute_traceroute(destination):
     """
@@ -15,13 +17,23 @@ def execute_traceroute(destination):
     Returns:
         str: The raw output from the traceroute command
     """
-    # Your code here
-    # Hint: Use the subprocess module to run the traceroute command
-    # Make sure to handle potential errors
+    # We use subprocess.run to execute the 'traceroute' command.
+    # - capture_output=True: captures stdout and stderr
+    # - text=True: returns output as a string instead of bytes
+    # - check=True: raises an exception if the command exits with a non-zero status
 
-    # Remove this line once you implement the function,
-    # and don't forget to *return* the output
-    pass
+    try:
+        result = subprocess.run(["traceroute", destination],
+                                capture_output=True,
+                                text=True,
+                                check=True)
+        # Return the standard output if successful
+        return result.stdout
+
+    except subprocess.CalledProcessError as e:
+        # If traceroute fails or returns a non-zero exit code,
+        # return whatever was captured so we don't lose partial data.
+        return e.stdout + "\n" + e.stderr
 
 def parse_traceroute(traceroute_output):
     """
@@ -39,35 +51,101 @@ def parse_traceroute(traceroute_output):
 
     Example:
     ```
-        [
-            {
-                'hop': 1,
-                'ip': '172.21.160.1',
-                'hostname': 'HELDMANBACK.mshome.net',
-                'rtt': [0.334, 0.311, 0.302]
-            },
-            {
-                'hop': 2,
-                'ip': '10.103.29.254',
-                'hostname': None,
-                'rtt': [3.638, 3.630, 3.624]
-            },
-            {
-                'hop': 3,
-                'ip': None,  # For timeout/asterisk
-                'hostname': None,
-                'rtt': [None, None, None]
-            }
-        ]
+    [
+        {
+            'hop': 1,
+            'ip': '192.168.1.1',
+            'hostname': '_gateway',
+            'rtt': [1.235, 1.391, 1.506]
+        },
+        {
+            'hop': 2,
+            'ip': None,
+            'hostname': None,
+            'rtt': [None, None, None]
+        }
+    ]
     ```
     """
-    # Your code here
-    # Hint: Use regular expressions to extract the relevant information
-    # Handle timeouts (asterisks) appropriately
 
-    # Remove this line once you implement the function,
-    # and don't forget to *return* the output
-    pass
+    # Split the raw output by lines for processing
+    lines = traceroute_output.split('\n')
+    hops = []
+
+    # Regular expressions to help parse each line
+    hop_line_regex = re.compile(r'^(\d+)\s+(.*)$')
+
+    # Pattern to capture RTT times: either '*' or a float followed by "ms"
+    # We also allow optional traceroute markers like !H, !N, !X (ignored after parsing the float).
+    time_pattern = re.compile(r'(\*)|(\d+(?:\.\d+)?)\s*ms(?:\s*!\S+)?')
+    
+    # Pattern to capture "hostname (IP)" format
+    host_ip_pattern = re.compile(r'([^\s\(]+)\s*\((\d+\.\d+\.\d+\.\d+)\)')
+    # Fallback pattern to find a standalone IP if parentheses are missing
+    ip_pattern = re.compile(r'(\d+\.\d+\.\d+\.\d+)')
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            # Skip empty or whitespace-only lines
+            continue
+
+        # Attempt to extract hop number and the rest of the line
+        hop_match = hop_line_regex.match(line)
+        if not hop_match:
+            # If we can't match a hop number at the start, skip this line
+            continue
+
+        hop_num = int(hop_match.group(1))
+        rest = hop_match.group(2)
+
+        # Default values
+        ip = None
+        hostname = None
+
+        # Extract RTT times. Each hop can have multiple RTT measurements (or '*').
+        rtt_values = []
+        for match in time_pattern.finditer(rest):
+            if match.group(1) == '*':
+                # Timeout for this measurement
+                rtt_values.append(None)
+            else:
+                # Convert the matched float string to a float
+                rtt_values.append(float(match.group(2)))
+
+        # Try to find "hostname (IP)" first
+        match_host_ip = host_ip_pattern.search(rest)
+        if match_host_ip:
+            possible_hostname = match_host_ip.group(1)
+            possible_ip = match_host_ip.group(2)
+
+            # If the 'hostname' text is the same as the IP, we consider it no real hostname
+            if possible_hostname == possible_ip:
+                hostname = None
+            else:
+                hostname = possible_hostname
+
+            ip = possible_ip
+        else:
+            # If no parentheses found, look for a bare IP
+            match_ip = ip_pattern.search(rest)
+            if match_ip:
+                ip_candidate = match_ip.group(1)
+                ip = ip_candidate
+                # Hostname remains None in this case
+
+        # Build the hop dictionary with the extracted data
+        hop_info = {
+            'hop': hop_num,
+            'ip': ip,
+            'hostname': hostname,
+            'rtt': rtt_values
+        }
+
+        # Add this hop's info to the list of results
+        hops.append(hop_info)
+
+    return hops
 
 # ============================================================================ #
 #                    DO NOT MODIFY THE CODE BELOW THIS LINE                    #
